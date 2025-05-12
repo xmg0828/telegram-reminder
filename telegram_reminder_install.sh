@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "开始安装 Telegram Reminder 美化版..."
+echo "开始安装 Telegram Reminder 改进版..."
 
 # 更新系统并安装必要的依赖
 echo "安装系统依赖..."
@@ -20,7 +20,7 @@ npm init -y
 echo "安装项目依赖..."
 npm install express body-parser node-telegram-bot-api
 
-# 写入美化版 app.js
+# 写入改进版 app.js
 echo "创建应用程序文件..."
 cat > app.js << 'INNER'
 const express = require('express');
@@ -62,12 +62,60 @@ function sendReminder(reminder) {
     }
 }
 
+// 获取下一次提醒的时间
+function getNextReminderTime(reminder) {
+    const reminderDate = new Date(reminder.time);
+    
+    if (reminder.repeat === '每天') {
+        // 设置为明天的同一时间
+        const nextDate = new Date(reminderDate);
+        nextDate.setDate(nextDate.getDate() + 1);
+        // 保持原始的小时、分钟和秒数
+        nextDate.setHours(reminderDate.getHours(), reminderDate.getMinutes(), reminderDate.getSeconds());
+        return nextDate;
+    } else if (reminder.repeat === '每周') {
+        // 设置为下周的同一天和时间
+        const nextDate = new Date(reminderDate);
+        nextDate.setDate(nextDate.getDate() + 7);
+        return nextDate;
+    } else if (reminder.repeat === '每月') {
+        // 设置为下个月的同一日期和时间
+        const nextDate = new Date(reminderDate);
+        // 获取当前月份的天数
+        const currentDay = reminderDate.getDate();
+        nextDate.setMonth(nextDate.getMonth() + 1);
+        
+        // 处理月底日期问题（例如1月31日到2月时应该是2月28/29日）
+        const lastDayOfNextMonth = new Date(nextDate.getFullYear(), nextDate.getMonth() + 1, 0).getDate();
+        if (currentDay > lastDayOfNextMonth) {
+            nextDate.setDate(lastDayOfNextMonth);
+        }
+        
+        return nextDate;
+    }
+    
+    // 如果不是重复提醒，返回null
+    return null;
+}
+
 app.get('/', (req, res) => {
     const now = new Date();
     let listItems = reminders.map((r, index) => {
         const timeStr = new Date(r.time).toLocaleString('zh-CN');
         const repeatText = r.repeat ? `[${r.repeat}提醒]` : '[仅一次提醒]';
-        return `<li style="font-size:18px;margin-bottom:10px;">${r.title} - ${timeStr} ${repeatText} - ${r.sent ? '✅已发送' : '❌待发送'} <a href="/delete/${index}" style="color:red;margin-left:10px;">❌删除</a></li>`;
+        // 添加不同的样式来区分即将到期的提醒
+        let style = '';
+        const reminderDate = new Date(r.time);
+        const diffTime = reminderDate - now;
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        if (diffDays <= 0) {
+            style = 'color:red;font-weight:bold;';
+        } else if (diffDays <= 3) {
+            style = 'color:orange;';
+        }
+        
+        return `<li style="font-size:18px;margin-bottom:10px;${style}">${r.title} - ${timeStr} ${repeatText} - ${r.sent ? '✅已发送' : '❌待发送'} <a href="/delete/${index}" style="color:red;margin-left:10px;">❌删除</a></li>`;
     }).join('');
 
     res.send(`
@@ -151,7 +199,14 @@ app.post('/saveConfig', (req, res) => {
 
 app.post('/add', (req, res) => {
     const { title, content, time, repeat } = req.body;
-    reminders.push({ title, content, time: new Date(time).toISOString(), sent: false, repeat });
+    reminders.push({ 
+        title, 
+        content, 
+        time: new Date(time).toISOString(), 
+        sent: false, 
+        repeat,
+        createdAt: new Date().toISOString() // 添加创建时间以便跟踪
+    });
     saveReminders();
     res.redirect('/');
 });
@@ -165,28 +220,43 @@ app.get('/delete/:index', (req, res) => {
     res.redirect('/');
 });
 
-setInterval(() => {
+// 提醒检查和处理函数
+function checkAndProcessReminders() {
     const now = new Date();
+    let hasChanges = false;
+    
     reminders.forEach((reminder, index) => {
-        if (!reminder.sent && new Date(reminder.time) <= now) {
+        const reminderTime = new Date(reminder.time);
+        
+        // 检查是否到了提醒时间
+        if (!reminder.sent && reminderTime <= now) {
+            // 发送提醒
             sendReminder(reminder);
             reminder.sent = true;
-            if (reminder.repeat === '每天') {
-                reminder.time = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-                reminder.sent = false;
-            } else if (reminder.repeat === '每周') {
-                reminder.time = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
-                reminder.sent = false;
-            } else if (reminder.repeat === '每月') {
-                const date = new Date(reminder.time);
-                date.setMonth(date.getMonth() + 1);
-                reminder.time = date.toISOString();
-                reminder.sent = false;
+            hasChanges = true;
+            
+            // 如果是重复提醒，则创建下一次提醒
+            if (reminder.repeat) {
+                const nextTime = getNextReminderTime(reminder);
+                if (nextTime) {
+                    reminder.time = nextTime.toISOString();
+                    reminder.sent = false;
+                }
             }
-            saveReminders();
         }
     });
-}, 30000);
+    
+    // 如果有变更，保存提醒列表
+    if (hasChanges) {
+        saveReminders();
+    }
+}
+
+// 每30秒检查一次提醒
+setInterval(checkAndProcessReminders, 30000);
+
+// 程序启动时立即检查一次
+checkAndProcessReminders();
 
 app.listen(PORT, () => {
     console.log(`✅ 提醒服务已启动，访问 http://你的IP:${PORT}`);
@@ -226,7 +296,7 @@ echo "检查服务状态..."
 systemctl status reminder_local
 
 echo ""
-echo "✅ Telegram Reminder 美化版安装完成！"
+echo "✅ Telegram Reminder 改进版安装完成！"
 echo "访问地址: http://你的IP:3005"
 echo "首次访问需要配置 Telegram Bot Token 和 Chat ID"
 echo ""
