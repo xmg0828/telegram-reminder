@@ -379,7 +379,6 @@ app.post('/saveConfig', (req, res) => {
             bot.stopPolling();
         }
         bot = new TelegramBot(config.token, { polling: true });
-        setupBotCommands(); // 重新设置命令
     }
     
     res.redirect('/');
